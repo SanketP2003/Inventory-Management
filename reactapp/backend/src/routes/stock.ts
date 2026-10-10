@@ -1,0 +1,12 @@
+import { Router } from 'express';
+import { z } from 'zod';
+import { pool, query } from '../db/pool.js';
+import { HttpError, validate } from '../middleware.js';
+import { notifyLowStock } from '../services/notifications.js';
+import { queueReorder } from '../services/reorderQueue.js';
+const router = Router();
+const adjustment = z.object({ quantity: z.number().int().refine((v) => v !== 0), reason: z.string().min(1).max(200) });
+router.get('/low-stock', async (_req,res,next) => { try { res.json((await query('SELECT * FROM products WHERE stock_quantity <= reorder_level ORDER BY stock_quantity')).rows); } catch(e){next(e);} });
+router.get('/:productId/movements', async (req,res,next) => { try { res.json((await query('SELECT * FROM stock_movements WHERE product_id=$1 ORDER BY created_at DESC', [req.params.productId])).rows); } catch(e){next(e);} });
+router.post('/:productId/adjust', validate(adjustment), async (req,res,next) => { const client = await pool.connect(); try { await client.query('BEGIN'); const product = await client.query('SELECT * FROM products WHERE id=$1 FOR UPDATE', [req.params.productId]); if (!product.rowCount) throw new HttpError(404,'Product not found'); const row = product.rows[0]; const nextStock = row.stock_quantity + req.body.quantity; if (nextStock < 0) throw new HttpError(400,'Stock cannot be negative'); const updated = await client.query('UPDATE products SET stock_quantity=$1,updated_at=now() WHERE id=$2 RETURNING *',[nextStock,row.id]); await client.query('INSERT INTO stock_movements(product_id,quantity,reason) VALUES ($1,$2,$3)',[row.id,req.body.quantity,req.body.reason]); await client.query('COMMIT'); const result=updated.rows[0]; if (result.stock_quantity <= result.reorder_level) { notifyLowStock(result); await queueReorder(result.id); } res.json(result); } catch(e){ await client.query('ROLLBACK'); next(e); } finally { client.release(); } });
+export default router;

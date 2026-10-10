@@ -1,0 +1,57 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ReorderStatus {
+  PENDING_APPROVAL
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model Product {
+  id                 String    @id @default(uuid())
+  name               String
+  sku                String    @unique
+  quantity           Int       @default(0)
+  lowStockThreshold  Int       @default(10)
+  costPrice          Decimal   @db.Decimal(10, 2)
+  supplierName       String
+  reorderQuantity    Int       @default(20)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  reorders           Reorder[]
+
+  @@index([sku])
+  @@map("products")
+}
+
+model Reorder {
+  id              String        @id @default(uuid())
+  productId       String
+  quantityOrdered Int
+  supplierName    String
+  totalValue      Decimal       @db.Decimal(10, 2)
+  status          ReorderStatus @default(PENDING_APPROVAL)
+  otpHash         String?
+  otpExpiresAt    DateTime?
+  otpAttempts     Int           @default(0)
+  failureReason   String?
+  attempts        Int           @default(0)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  approvedAt      DateTime?
+
+  product         Product       @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@index([status])
+  @@index([productId])
+  @@map("reorders")
+}
